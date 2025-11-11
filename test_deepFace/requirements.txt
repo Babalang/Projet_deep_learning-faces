@@ -2,3 +2,10 @@ deepface
 opencv-python
 matplotlib
 tf-keras
+tensorflow-addons
+numpy
+pandas
+scipy
+Pillow
+tqdm
+gdown
