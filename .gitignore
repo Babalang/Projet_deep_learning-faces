@@ -5,3 +5,4 @@ __pycache__/
 # Ignore compiled Python files
 *.py[cod]
 *.pyc
+/test_deepFace/imgs_db

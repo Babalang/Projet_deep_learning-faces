@@ -1,6 +1,7 @@
 import os
 import cv2
 from typing import List, Dict, Any, Tuple
+#from models.demography.Emotion import train_emotion_model
 
 # réduire les logs TF
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
@@ -11,7 +12,7 @@ import numpy as np
 from typing import Any, Dict, List, Union
 
 def test_analyze_face():
-    img_path = "./imgs_db/degout.jpg"
+    img_path = "./imgs_db/img14.jpg"
     if not os.path.isfile(img_path):
         print(f"Image not found: {img_path}")
         return
@@ -27,7 +28,7 @@ def test_analyze_face():
 def draw_annotations(
     img_bgr: "np.ndarray",
     resp_objs: List[Dict[str, Any]],
-    box_color: Tuple[int,int,int]=(0,255,0),
+    box_color: Tuple[int,int,int]=(0,0,0),
     text_color: Tuple[int,int,int]=(255,255,255),
     font_scale: float=0.7,
     thickness: int=2,
@@ -73,6 +74,7 @@ def draw_annotations(
 
 
 def main():
+    #train_emotion_model()
     test_analyze_face()
 
 if __name__ == "__main__":
