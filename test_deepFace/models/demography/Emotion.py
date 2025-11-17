@@ -17,7 +17,7 @@ if tf_major_version == 1:
     from keras.layers import Conv2D, Flatten, Activation, MaxPooling2D, AveragePooling2D, Dropout, Dense
 else:
     from tensorflow.keras.models import Model,Sequential
-    from tensorflow.keras.layers import Conv2D, Flatten, Activation, MaxPooling2D, AveragePooling2D, Dropout, Dense
+    from tensorflow.keras.layers import Conv2D, Flatten, Activation, MaxPooling2D, AveragePooling2D, Dropout, Dense, Input, Reshape, Concatenate
 
 labels = ['Angry', 'Disgust', 'Fear', 'Happy', 'Sad', 'Surprise', 'Neutral']
 
@@ -81,6 +81,49 @@ def load_model(
 
     return model
 
+def load_model_latent(latent_dim=500):
+    img_input = Input(shape=(48, 48, 1), name="input")
+    x = Conv2D(64, (5, 5), activation="relu")(img_input)
+    x = MaxPooling2D(pool_size=(5, 5), strides=(2, 2))(x)
+    x = Conv2D(64, (3, 3), activation="relu")(x)
+    x = Conv2D(64, (3, 3), activation="relu")(x)
+    x = AveragePooling2D(pool_size=(3, 3), strides=(2, 2))(x)
+    x = Conv2D(128, (3, 3), activation="relu")(x)
+    x = Conv2D(128, (3, 3), activation="relu")(x)
+    x = AveragePooling2D(pool_size=(3, 3), strides=(2, 2))(x)
+    x = Flatten()(x)
+    x = Dense(1024, activation="relu")(x)
+    x = Dropout(0.3)(x)
+    x = Dense(1024, activation="relu")(x)
+    x = Dropout(0.3)(x)
+    mu = Dense(latent_dim, name="mu")(x)
+    logvar = Dense(latent_dim, name="logvar")(x)
+    model = Model(inputs=img_input, outputs=[mu, logvar], name="vae_encoder")
+    return model
+
+def load_model_decoder(latent_dim=500, num_classes=7) -> Model:
+    from tensorflow.keras.layers import Conv2DTranspose, BatchNormalization
+    
+    latent_input = Input(shape=(latent_dim,), name="latent")
+    emotion_input = Input(shape=(num_classes,), name="emotion")
+
+    x = Concatenate()([latent_input, emotion_input])
+    x = Dense(3 * 3 * 128, activation="relu")(x)
+    x = Reshape((3, 3, 128))(x)
+    
+    x = Conv2DTranspose(128, (3, 3), strides=2, padding="same", activation="relu")(x)  # 6x6
+    x = BatchNormalization()(x)
+    x = Conv2DTranspose(64, (3, 3), strides=2, padding="same", activation="relu")(x)   # 12x12
+    x = BatchNormalization()(x)
+    x = Conv2DTranspose(64, (3, 3), strides=2, padding="same", activation="relu")(x)   # 24x24
+    x = BatchNormalization()(x)
+    x = Conv2DTranspose(32, (3, 3), strides=2, padding="same", activation="relu")(x)   # 48x48
+    x = Conv2DTranspose(1, (3, 3), padding="same", activation="sigmoid")(x)            # 48x48x1
+
+    decoder = Model(inputs=[latent_input, emotion_input], outputs=x, name="decoder")
+    return decoder
+
+
 
 def load_fer2013_dataset(data_dir,labels):
     X,y = [],[]
@@ -101,6 +144,22 @@ def load_fer2013_dataset(data_dir,labels):
     X = np.expand_dims(X,axis=-1)
     y = np.array(y)
     return X,y
+
+def load_faces_dataset(folder):
+    # Charge toutes les images, resize en (48,48), normalise
+    import os, cv2
+    X = []
+    for fname in os.listdir(folder):
+        for ffname in os.listdir(os.path.join(folder,fname)):
+            if ffname.lower().endswith(('.jpg', '.jpeg', '.png')):
+                img = cv2.imread(os.path.join(os.path.join(folder, fname), ffname), cv2.IMREAD_GRAYSCALE)
+                if img is None: continue
+                img = cv2.resize(img, (48, 48))
+                img = img.astype(np.float32) / 255.0
+                X.append(img)
+    X = np.array(X)
+    X = np.expand_dims(X, axis=-1)  # (N, 48, 48, 1)
+    return X
 
 def train_emotion_model():
     print("Loading FER2013 dataset...")
@@ -139,3 +198,58 @@ def train_emotion_model():
     class_weight_dict = dict(enumerate(class_weights))
     model.fit(datagen.flow(X_train, y_train_oneshot, batch_size=64), epochs=20, validation_data=(X_test, y_test_oneshot), class_weight=class_weight_dict, callbacks=[early_stopping, reduce_lr])
     model.save("emotion_model.h5")
+
+
+if __name__ == "__main__":
+    X_train = load_faces_dataset("imgs_db/train")
+    print(f"Shape de X_train : {X_train.shape}")
+    print(f"Dtype de X_train : {X_train.dtype}")
+    latent_dim = 500
+    encoder = load_model_latent(latent_dim)
+    decoder = load_model_decoder(latent_dim, num_classes=len(labels))
+
+    class Sampling(tf.keras.layers.Layer):
+        def call(self, inputs):
+            mu, logvar = inputs
+            epsilon = tf.keras.backend.random_normal(shape=tf.shape(mu))
+            return mu + tf.exp(0.5 * logvar) * epsilon
+    img_input = Input(shape=(48, 48, 1))
+    emotion_input = Input(shape=(len(labels),))
+    mu, logvar = encoder(img_input)
+    z = Sampling()([mu, logvar])
+    reconstructed_img = decoder([z, emotion_input])
+    vae = Model(inputs=[img_input, emotion_input], outputs=reconstructed_img)
+
+    def vae_loss(y_true, y_pred, mu, logvar):
+        recon_loss = tf.reduce_mean(tf.keras.losses.binary_crossentropy(y_true, y_pred))
+        kl_loss = -0.5 * tf.reduce_mean(1 + logvar - tf.square(mu) - tf.exp(logvar))
+        return recon_loss + kl_loss
+
+    class VAETrainer(Model):
+        def __init__(self, vae, encoder):
+            super().__init__()
+            self.vae = vae
+            self.encoder = encoder
+
+        def train_step(self, data):
+            x = data
+            emotion = tf.zeros((tf.shape(x)[0], 7))
+            with tf.GradientTape() as tape:
+                mu, logvar = self.encoder(x)
+                z = Sampling()([mu, logvar])
+                y_pred = self.vae([x, emotion])
+                loss = vae_loss(x, y_pred, mu, logvar)
+            grads = tape.gradient(loss, self.vae.trainable_weights)
+            self.optimizer.apply_gradients(zip(grads, self.vae.trainable_weights))
+            return {"loss": loss}
+    
+    dataset = tf.data.Dataset.from_tensor_slices(X_train)
+    dataset = dataset.shuffle(buffer_size=1024).batch(64)
+    
+    vae_trainer = VAETrainer(vae, encoder)
+    vae_trainer.compile(optimizer="adam")
+    vae_trainer.fit(dataset, epochs=50)
+
+    vae.save("vae_face_model.h5")
+    decoder.save("decoder_model.h5")
+

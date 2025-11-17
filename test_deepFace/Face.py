@@ -1,7 +1,6 @@
 import os
 import cv2
 from typing import List, Dict, Any, Tuple
-#from models.demography.Emotion import train_emotion_model
 
 # réduire les logs TF
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
@@ -72,10 +71,71 @@ def draw_annotations(
             pass
     return out
 
+def vae_reconstruct(
+    img_path: Union[str, np.ndarray, IO[bytes]],
+    enforce_detection: bool = True,
+    detector_backend: str = "opencv",
+    align: bool = True,
+    expand_percentage: int = 0,
+    silent: bool = False,
+    anti_spoofing: bool = False,
+) -> None:
+    """
+    Encode et décode le premier visage détecté, affiche l'image originale et reconstruite.
+    """
+    import cv2
+
+    # 1. Encode
+    resp = encode(
+        img_path=img_path,
+        enforce_detection=enforce_detection,
+        detector_backend=detector_backend,
+        align=align,
+        expand_percentage=expand_percentage,
+        silent=silent,
+        anti_spoofing=anti_spoofing,
+    )
+
+    if not resp or len(resp) == 0:
+        print("Aucun visage détecté.")
+        return
+
+    # 2. Decode
+    latent = resp[0]["z"]
+    reconstructed = decode(latent)
+
+    # 3. Affichage
+    # Récupère l'image originale (imagette du visage)
+    img_objs = extract_faces(
+        img_path=img_path,
+        detector_backend=detector_backend,
+        enforce_detection=enforce_detection,
+        grayscale=False,
+        align=align,
+        expand_percentage=expand_percentage,
+        anti_spoofing=anti_spoofing,
+    )
+    img_content = img_objs[0]["face"] * 255.0
+    img_content = img_content.astype(np.uint8)
+    img_gray = cv2.cvtColor(img_content, cv2.COLOR_BGR2GRAY)
+    img_gray = cv2.resize(img_gray, (48, 48))
+
+    # Met les deux images côte à côte
+    reconstructed = reconstructed.squeeze()
+    if reconstructed.shape != img_gray.shape:
+        reconstructed = cv2.resize(reconstructed, img_gray.shape[::-1])
+    combined = np.hstack([img_gray, reconstructed])
+
+    cv2.imshow("Original (gauche) | Reconstruite (droite)", combined)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    
+
 
 def main():
     #train_emotion_model()
-    test_analyze_face()
+    #test_analyze_face()
+    vae_reconstruct("./imgs_db/degout.jpg")
 
 if __name__ == "__main__":
     main()
