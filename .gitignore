@@ -6,3 +6,4 @@ __pycache__/
 *.py[cod]
 *.pyc
 /test_deepFace/imgs_db
+.venv

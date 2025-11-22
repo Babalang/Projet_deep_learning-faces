@@ -81,7 +81,7 @@ def load_model(
 
     return model
 
-def load_model_latent(latent_dim=500):
+def load_model_latent(latent_dim=128):
     img_input = Input(shape=(48, 48, 1), name="input")
     x = Conv2D(64, (5, 5), activation="relu")(img_input)
     x = MaxPooling2D(pool_size=(5, 5), strides=(2, 2))(x)
@@ -101,27 +101,26 @@ def load_model_latent(latent_dim=500):
     model = Model(inputs=img_input, outputs=[mu, logvar], name="vae_encoder")
     return model
 
-def load_model_decoder(latent_dim=500, num_classes=7) -> Model:
+def load_model_decoder(latent_dim=128):
     from tensorflow.keras.layers import Conv2DTranspose, BatchNormalization
-    
+
     latent_input = Input(shape=(latent_dim,), name="latent")
-    emotion_input = Input(shape=(num_classes,), name="emotion")
-
-    x = Concatenate()([latent_input, emotion_input])
-    x = Dense(3 * 3 * 128, activation="relu")(x)
-    x = Reshape((3, 3, 128))(x)
     
-    x = Conv2DTranspose(128, (3, 3), strides=2, padding="same", activation="relu")(x)  # 6x6
-    x = BatchNormalization()(x)
-    x = Conv2DTranspose(64, (3, 3), strides=2, padding="same", activation="relu")(x)   # 12x12
-    x = BatchNormalization()(x)
-    x = Conv2DTranspose(64, (3, 3), strides=2, padding="same", activation="relu")(x)   # 24x24
-    x = BatchNormalization()(x)
-    x = Conv2DTranspose(32, (3, 3), strides=2, padding="same", activation="relu")(x)   # 48x48
-    x = Conv2DTranspose(1, (3, 3), padding="same", activation="sigmoid")(x)            # 48x48x1
+    x = Dense(6 * 6 * 128, activation="relu")(latent_input)
+    x = Reshape((6, 6, 128))(x)
 
-    decoder = Model(inputs=[latent_input, emotion_input], outputs=x, name="decoder")
+    x = Conv2DTranspose(128, 3, strides=2, padding="same", activation="relu")(x)  # 12x12
+    x = BatchNormalization()(x)
+
+    x = Conv2DTranspose(64, 3, strides=2, padding="same", activation="relu")(x)   # 24x24
+    x = BatchNormalization()(x)
+
+    x = Conv2DTranspose(32, 3, strides=2, padding="same", activation="relu")(x)   # 48x48
+    x = Conv2DTranspose(1, 3, padding="same", activation="sigmoid")(x)
+
+    decoder = Model(inputs=latent_input, outputs=x)
     return decoder
+
 
 
 
@@ -204,50 +203,70 @@ if __name__ == "__main__":
     X_train = load_faces_dataset("imgs_db/train")
     print(f"Shape de X_train : {X_train.shape}")
     print(f"Dtype de X_train : {X_train.dtype}")
-    latent_dim = 500
+    latent_dim = 128
     encoder = load_model_latent(latent_dim)
-    decoder = load_model_decoder(latent_dim, num_classes=len(labels))
+    decoder = load_model_decoder(latent_dim)
 
+    img_input = Input(shape=(48,48,1))
+    mu, logvar = encoder(img_input)
+
+    # ----- SAMPLING LAYER -----
     class Sampling(tf.keras.layers.Layer):
         def call(self, inputs):
             mu, logvar = inputs
-            epsilon = tf.keras.backend.random_normal(shape=tf.shape(mu))
+            epsilon = tf.random.normal(shape=tf.shape(mu))
             return mu + tf.exp(0.5 * logvar) * epsilon
-    img_input = Input(shape=(48, 48, 1))
-    emotion_input = Input(shape=(len(labels),))
-    mu, logvar = encoder(img_input)
+
+
     z = Sampling()([mu, logvar])
-    reconstructed_img = decoder([z, emotion_input])
-    vae = Model(inputs=[img_input, emotion_input], outputs=reconstructed_img)
+    reconstructed_img = decoder(z)
+    vae = Model(inputs=img_input, outputs=reconstructed_img)
 
     def vae_loss(y_true, y_pred, mu, logvar):
-        recon_loss = tf.reduce_mean(tf.keras.losses.binary_crossentropy(y_true, y_pred))
-        kl_loss = -0.5 * tf.reduce_mean(1 + logvar - tf.square(mu) - tf.exp(logvar))
-        return recon_loss + kl_loss
+        bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+        recon_loss = tf.reduce_sum(bce, axis=[1,2])   # <-- corrigé
+        kl_loss = -0.5 * tf.reduce_sum(1 + logvar - tf.square(mu) - tf.exp(logvar), axis=1)
+        return tf.reduce_mean(recon_loss + kl_loss)
 
-    class VAETrainer(Model):
-        def __init__(self, vae, encoder):
+
+
+    class VAE(Model):
+        def __init__(self, encoder, decoder):
             super().__init__()
-            self.vae = vae
             self.encoder = encoder
+            self.decoder = decoder
 
-        def train_step(self, data):
-            x = data
-            emotion = tf.zeros((tf.shape(x)[0], 7))
+        def train_step(self, x):
             with tf.GradientTape() as tape:
                 mu, logvar = self.encoder(x)
                 z = Sampling()([mu, logvar])
-                y_pred = self.vae([x, emotion])
-                loss = vae_loss(x, y_pred, mu, logvar)
-            grads = tape.gradient(loss, self.vae.trainable_weights)
-            self.optimizer.apply_gradients(zip(grads, self.vae.trainable_weights))
+                y_pred = self.decoder(z)
+
+                # --- reconstruction loss ---
+                recon_loss = tf.reduce_sum(
+                    tf.keras.losses.binary_crossentropy(x, y_pred),
+                    axis=[1,2]
+                )
+
+                # --- KL divergence ---
+                kl_loss = -0.5 * tf.reduce_sum(
+                    1 + logvar - tf.square(mu) - tf.exp(logvar),
+                    axis=1
+                )
+
+                loss = tf.reduce_mean(recon_loss + kl_loss)
+
+            grads = tape.gradient(loss, self.trainable_weights)
+            self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
             return {"loss": loss}
+
+
     
     dataset = tf.data.Dataset.from_tensor_slices(X_train)
     dataset = dataset.shuffle(buffer_size=1024).batch(64)
     
-    vae_trainer = VAETrainer(vae, encoder)
-    vae_trainer.compile(optimizer="adam")
+    vae_trainer = VAE(encoder, decoder)
+    vae_trainer.compile(optimizer=tf.keras.optimizers.Adam(1e-3))
     vae_trainer.fit(dataset, epochs=50)
 
     vae.save("vae_face_model.h5")

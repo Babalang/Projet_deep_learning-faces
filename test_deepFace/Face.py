@@ -101,7 +101,7 @@ def vae_reconstruct(
         return
 
     # 2. Decode
-    latent = resp[0]["z"]
+    latent = resp[0].get("mu",resp[0]["z"])
     reconstructed = decode(latent)
 
     # 3. Affichage
