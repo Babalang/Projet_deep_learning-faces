@@ -7,3 +7,4 @@ __pycache__/
 *.pyc
 /test_deepFace/imgs_db
 .venv
+test_deepFace/models/faceflex_cvae.pth
