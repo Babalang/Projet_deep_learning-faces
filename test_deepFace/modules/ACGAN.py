@@ -58,25 +58,17 @@ def define_discriminator(input_shape=(48, 48, 1), n_classes=7):
     input_image = Input(shape=input_shape)
     fe = Conv2D(32, (3,3), strides=(2,2), padding='same')(input_image)
     fe = LeakyReLU(alpha=0.2)(fe)
-    fe = Dropout(0.2)(fe)
+    fe = Dropout(0.3)(fe)
     fe = Conv2D(64, (3,3),strides=(2,2), padding='same')(fe)
-    fe = BatchNormalization()(fe)
-    fe = LeakyReLU(alpha=0.2)(fe)
-    fe = Dropout(0.2)(fe)
-    fe = Conv2D(128, (3,3), strides=(2,2), padding='same')(fe)
-    fe = BatchNormalization()(fe)
-    fe = LeakyReLU(alpha=0.2)(fe)
-    fe = Dropout(0.2)(fe)
-    fe = Conv2D(256, (3,3), padding='same')(fe)
     fe = BatchNormalization()(fe)
     fe = LeakyReLU(alpha=0.2)(fe)
     fe = Dropout(0.3)(fe)
     fe = Flatten()(fe)
-    out1 = Dense(1, activation='sigmoid')(fe)
-    out2 = Dense(n_classes, activation='softmax')(fe)
+    out1 = Dense(1, activation='sigmoid', name="fake_real")(fe)
+    out2 = Dense(n_classes, activation='softmax', name="emotion")(fe)
     model = Model(input_image, [out1, out2])
-    opt = Adam(learning_rate=0.00005, beta_1=0.5)
-    model.compile(loss=['binary_crossentropy', 'sparse_categorical_crossentropy'], optimizer=opt)
+    opt = Adam(learning_rate=0.002, beta_1=0.5)
+    model.compile(loss=['binary_crossentropy', 'sparse_categorical_crossentropy'], optimizer=opt, metrics=['accuracy', 'accuracy'])
     return model
 d=define_discriminator()
 d.summary()
@@ -93,29 +85,30 @@ def define_generator(latent_dim, n_classes=7):
     gen = Activation('relu')(gen)
     gen = Reshape((12, 12, 384))(gen)
     merge = Concatenate()([gen, li])
-    gen = Conv2DTranspose(256, (5,5), strides=(2,2), padding='same')(merge)
+    # Première couche upsampling
+    gen = Conv2DTranspose(192, (5,5), strides=(2,2), padding='same')(merge)
     gen = BatchNormalization()(gen)
     gen = Activation('relu')(gen)
-    gen = Conv2DTranspose(128, (5,5), strides=(2,2), padding='same')(gen)
+    # Deuxième couche upsampling
+    gen = Conv2DTranspose(96, (5,5), strides=(2,2), padding='same')(gen)
     gen = BatchNormalization()(gen)
     gen = Activation('relu')(gen)
-    gen = Conv2DTranspose(64, (5,5), strides=(1,1), padding='same')(gen)
+    # Troisième couche upsampling (ajoutée)
+    gen = Conv2DTranspose(48, (5,5), strides=(1,1), padding='same')(gen)
     gen = BatchNormalization()(gen)
     gen = Activation('relu')(gen)
-    gen = Conv2DTranspose(1, (5,5), strides=(1,1), padding='same')(gen)
-    out_layer = Activation('tanh')(gen)
+    # Couche de sortie
+    out_layer = Conv2DTranspose(1, (5,5), strides=(1,1), padding='same', activation='tanh')(gen)
     model = Model([input_lat, input_label], out_layer)
     return model
-g = define_generator(latent_dim=100)
+g=define_generator(latent_dim=100)
 g.summary()
 
 def define_gan(g_model, d_model):
-    for layer in d_model.layers:
-        if not isinstance(layer, BatchNormalization):
-            layer.trainable = False
+    d_model.trainable = False
     gan_output = d_model(g_model.output)
     model = Model(g_model.input, gan_output)
-    opt = Adam(learning_rate=0.0001, beta_1=0.5)
+    opt = Adam(learning_rate=0.003, beta_1=0.5)
     model.compile(loss=['binary_crossentropy', 'sparse_categorical_crossentropy'], optimizer=opt)
     return model
 
@@ -124,110 +117,75 @@ def generate_fake_samples(generator, latent_dim, n_samples, n_classes=7):
     z_input = np.random.randn(latent_dim * n_samples)
     z_input = z_input.reshape(n_samples, latent_dim)
     labels = np.random.randint(0, n_classes, n_samples).reshape(-1, 1)
-    assert labels.min() >= 0 and labels.max() <= 6
-    X_fake = generator.predict([z_input, labels])
+    X_fake = generator.predict([z_input, labels], verbose=0)
     return X_fake, labels
 
 
 def train(g_model, d_model, gan_model, dataset, latent_dim, n_epochs, n_batch):
     X_train, y_train = dataset
-    bat_per_epo = max(1, X_train.shape[0] // n_batch)
-    print(f"Batches/epoch: {bat_per_epo}")
-    
-    history = {'d_real': [], 'd_fake': [], 'g_loss': []}
-    
+    bat_per_epo = 256
     for epoch in range(1, n_epochs + 1):
-        print(f"\n{'='*60}")
         print(f"Epoch {epoch}/{n_epochs}")
-        print(f"{'='*60}")
-        
-        d_r1_sum, d_r2_sum = 0, 0
-        d_f_sum, d_f2_sum = 0, 0
-        g_1_sum, g_2_sum = 0, 0
-        
+
         for batch in range(bat_per_epo):
+            d_model.trainable = True
             ix = np.random.randint(0, X_train.shape[0], n_batch)
             X_real, labels_real = X_train[ix], y_train[ix]
-            # Ajout de bruit
-            X_real += np.random.normal(0, 0.05, X_real.shape)
-            X_real = np.clip(X_real, -1.0, 1.0)
-            y_real = np.random.uniform(0.8, 1.0, (n_batch, 1))
-            _, d_r1, d_r2 = d_model.train_on_batch(X_real, [y_real, labels_real])
+            y_real = 0.9 * np.ones((n_batch, 1))
+            d_loss_real = d_model.train_on_batch(X_real, [y_real, labels_real])
 
             X_fake, labels_fake = generate_fake_samples(g_model, latent_dim, n_batch)
-            y_fake = np.random.uniform(0.0, 0.2, (n_batch, 1))
-            _, d_f, d_f2 = d_model.train_on_batch(X_fake, [y_fake, labels_fake])
+            y_fake = np.zeros((n_batch, 1))
+            d_loss_fake = d_model.train_on_batch(X_fake, [y_fake, labels_fake])
 
-            z_input = np.random.randn(n_batch, latent_dim)
+            d_model.trainable = False
+
+            z_input = np.random.randn(n_batch * latent_dim)
+            z_input = z_input.reshape(n_batch, latent_dim)
             z_labels = np.random.randint(0, 7, n_batch).reshape(-1, 1)
             y_gan = np.ones((n_batch, 1))
-            _, g_1, g_2 = gan_model.train_on_batch([z_input, z_labels], [y_gan, z_labels])
+            g_loss = gan_model.train_on_batch([z_input, z_labels], [y_gan, z_labels])
 
-            d_r1_sum += d_r1
-            d_r2_sum += d_r2
-            d_f_sum += d_f
-            d_f2_sum += d_f2
-            g_1_sum += g_1
-            g_2_sum += g_2
-        
-        avg_d_real = d_r1_sum / bat_per_epo
-        avg_d_fake = d_f_sum / bat_per_epo
-        avg_g = g_1_sum / bat_per_epo
-        
-        history['d_real'].append(avg_d_real)
-        history['d_fake'].append(avg_d_fake)
-        history['g_loss'].append(avg_g)
-        
-        print(f"\n[Summary] D_real: {avg_d_real:.4f} | D_fake: {avg_d_fake:.4f} | G: {avg_g:.4f}")
+            print(
+                f"  Batch {batch+1}/{bat_per_epo} | "
+                f"D_real: loss={d_loss_real[0]:.3f}, "
+                f"FAKE/REAL_acc={d_loss_real[2]:.3f}, EMO_acc={d_loss_real[4]:.3f} | "
+                f"D_fake: loss={d_loss_fake[0]:.3f}, "
+                f"FAKE/REAL_acc={d_loss_fake[2]:.3f}, EMO_acc={d_loss_fake[4]:.3f} | "
+                f"G_loss={g_loss[0]:.3f}"
+            )
 
+        # Save generated images every few epochs
         if epoch % 10 == 0:
-            examples = 7
-            latent_points = np.random.randn(examples, latent_dim)
-            labels = np.arange(0, 7).reshape(-1, 1)
-            X_fake = g_model.predict([latent_points, labels])
-            imgs = (X_fake + 1.0) / 2.0
-            
-            plt.figure(figsize=(14, 2))
-            for i in range(examples):
-                plt.subplot(1, examples, i+1)
-                plt.imshow(imgs[i].reshape(48, 48), cmap='gray')
-                plt.axis('off')
-                plt.title(f'Emo {int(labels[i])}', fontsize=10)
-            plt.tight_layout()
-            plt.savefig(f"generated_epoch_{epoch:04d}.png", dpi=100)
-            plt.close()
-            
-            save_model(g_model, f'checkpoints/generator_epoch_{epoch}.h5')
-            save_model(d_model, f'checkpoints/discriminator_epoch_{epoch}.h5')
-            print(f"✓ Checkpoint sauvegardé: epoch {epoch}")
-        
-        if epoch % 50 == 0:
-            plt.figure(figsize=(10, 4))
-            plt.plot(history['d_real'], label='D_real', alpha=0.7)
-            plt.plot(history['d_fake'], label='D_fake', alpha=0.7)
-            plt.plot(history['g_loss'], label='G_loss', alpha=0.7)
-            plt.xlabel('Epoch')
-            plt.ylabel('Loss')
-            plt.title('Training History')
-            plt.legend()
-            plt.grid(True, alpha=0.3)
-            plt.savefig(f'training_history_epoch_{epoch}.png', dpi=100)
-            plt.close()
-            print(f"✓ Graphe sauvegardé: epoch {epoch}")
+          examples=10
+          latent_dim=100
+          latent_points = np.random.randn(examples * latent_dim)
+          latent_points = latent_points.reshape(examples, latent_dim)
+          labels = np.random.randint(0, 7, examples).reshape(-1, 1)
+          X_fake = g_model.predict([latent_points, labels])
+          plt.figure(figsize=(10, 10))
+          for i in range(examples):
+            plt.subplot(1, examples, i + 1)
+            plt.imshow(X_fake[i].reshape(48, 48), cmap='gray')
+            plt.title('Label: %d' % labels[i])
+            plt.axis('off')
+          filename = 'generated_epoch2_%04d.png' % (epoch)
+          plt.savefig(filename)
+          plt.close()
      
 
 def run_cgan():
-    os.makedirs('checkpoints', exist_ok=True)
     dataset = load_fer2013_dataset()
     X_train, y_train = dataset
     d_model = define_discriminator(input_shape=(48, 48, 1))
     g_model = define_generator(latent_dim=100)
     gan_model = define_gan(g_model, d_model)
-    train(g_model, d_model, gan_model, (X_train, y_train), latent_dim=100, n_epochs=200, n_batch=16)
-    save_model(d_model, 'discriminator_model.h5')
-    save_model(g_model, 'generator_model.h5')
-    save_model(gan_model, 'acgan_model.h5')
-    print("\n✓ Entraînement terminé. Modèles finaux sauvegardés.")
+    train(g_model, d_model, gan_model, (X_train, y_train), latent_dim=100, n_epochs=200, n_batch=64)
+    save_model(d_model, 'discriminator_model.h5')  # Save discriminator model
+    # Save generator model
+    save_model(g_model, 'generator_model.h5')  # Save generator model
+    # Save GAN model (including both generator and discriminator)
+    save_model(gan_model, 'acgan_model.h5')  # Save CGAN model
 
 def generate_emotion_image(latent_vector, emotion_label):
     g_model = load_model('generator_model.h5', compile=False)

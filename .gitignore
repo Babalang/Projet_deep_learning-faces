@@ -9,3 +9,6 @@ __pycache__/
 .venv
 checkpoints/
 /runs
+*.png
+*.h5
+*.csv

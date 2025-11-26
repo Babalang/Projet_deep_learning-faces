@@ -11,7 +11,7 @@ import numpy as np
 from typing import Any, Dict, List, Union
 
 def test_analyze_face():
-    img_path = "./imgs_db/img14.jpg"
+    img_path = "./imgs_db/fear.jpg"
     if not os.path.isfile(img_path):
         print(f"Image not found: {img_path}")
         return
@@ -134,8 +134,8 @@ def vae_reconstruct(
 
 def main():
     #train_emotion_model()
-    #test_analyze_face()
-    vae_reconstruct("./imgs_db/degout.jpg")
+    test_analyze_face()
+    #vae_reconstruct("./imgs_db/fear.jpg")
 
 if __name__ == "__main__":
     main()
