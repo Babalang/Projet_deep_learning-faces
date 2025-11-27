@@ -23,7 +23,7 @@ else:
 import numpy as np
 import pandas as pd
 
-from keras.layers import Input, Conv2D, LeakyReLU, Dropout, BatchNormalization, Flatten, Dense, Embedding, Reshape, Activation, Concatenate, Conv2DTranspose
+from keras.layers import Input, Conv2D, LeakyReLU, Dropout, BatchNormalization, Flatten, Dense, Embedding, Reshape, Activation, Concatenate, Conv2DTranspose, MaxPooling2D, UpSampling2D
 from keras.models import Model
 from keras.optimizers import Adam
 from numpy.random import randn, randint
@@ -33,6 +33,11 @@ from math import sqrt
 from numpy import asarray
 from numpy.random import randn
 from keras.models import load_model
+
+emotion_labels = {
+        0: "Angry", 1: "Disgust", 2: "Fear", 3: "Happy",
+        4: "Sad", 5: "Surprise", 6: "Neutral"
+    }
 
 def load_fer2013_dataset():
     data = pd.read_csv('./test_deepFace/modules/fer2013.csv')
@@ -56,19 +61,28 @@ def load_fer2013_dataset():
 
 def define_discriminator(input_shape=(48, 48, 1), n_classes=7):
     input_image = Input(shape=input_shape)
-    fe = Conv2D(32, (3,3), strides=(2,2), padding='same')(input_image)
-    fe = LeakyReLU(alpha=0.2)(fe)
-    fe = Dropout(0.3)(fe)
-    fe = Conv2D(64, (3,3),strides=(2,2), padding='same')(fe)
-    fe = BatchNormalization()(fe)
-    fe = LeakyReLU(alpha=0.2)(fe)
-    fe = Dropout(0.3)(fe)
-    fe = Flatten()(fe)
-    out1 = Dense(1, activation='sigmoid', name="fake_real")(fe)
-    out2 = Dense(n_classes, activation='softmax', name="emotion")(fe)
+    x = Conv2D(256, 3, padding='same')(input_image)
+    x = LeakyReLU(alpha=0.2)(x)
+    x = Conv2D(256, 4, strides=2, padding='same')(x)
+    x = LeakyReLU(alpha=0.2)(x)
+    x = Conv2D(256, 4, strides=2, padding='same')(x)
+    x = LeakyReLU(alpha=0.2)(x)
+    x = Conv2D(256, 4, strides=2, padding='same')(x)
+    x = LeakyReLU(alpha=0.2)(x)
+    x = Conv2D(256, 4, strides=2, padding='same')(x)
+    x = LeakyReLU(alpha=0.2)(x)
+    x = Flatten()(x)
+    x = Dropout(0.4)(x)
+#    x = Dense(128, activation='relu')(x)
+    out1 = Dense(1, activation='sigmoid', name="fake_real")(x)
+    out2 = Dense(n_classes, activation='softmax', name="emotion")(x)
     model = Model(input_image, [out1, out2])
-    opt = Adam(learning_rate=0.002, beta_1=0.5)
-    model.compile(loss=['binary_crossentropy', 'sparse_categorical_crossentropy'], optimizer=opt, metrics=['accuracy', 'accuracy'])
+    opt = Adam(learning_rate=0.0003, beta_1=0.5)
+    model.compile(
+        loss=['binary_crossentropy', 'sparse_categorical_crossentropy'],
+        optimizer=opt,
+        metrics=['accuracy', 'accuracy']
+    )
     return model
 d=define_discriminator()
 d.summary()
@@ -101,14 +115,44 @@ def define_generator(latent_dim, n_classes=7):
     out_layer = Conv2DTranspose(1, (5,5), strides=(1,1), padding='same', activation='tanh')(gen)
     model = Model([input_lat, input_label], out_layer)
     return model
-g=define_generator(latent_dim=100)
+
+# Remplace define_generator par une version UNet
+def define_unet_generator(latent_dim, n_classes=7):
+    input_label = Input(shape=(1,))
+    li = Embedding(n_classes, 50)(input_label)
+    li = Dense(12 * 12)(li)
+    li = Reshape((12, 12, 1))(li)
+
+    input_lat = Input(shape=(latent_dim,))
+    x = Dense(128 * 12 * 12)(input_lat)
+    x = LeakyReLU(alpha=0.2)(x)
+    x = Reshape((12, 12, 128))(x)
+
+    merge = Concatenate()([x, li])
+
+    # Ajout de plusieurs couches d'upsampling
+    x = Conv2D(256, 5, padding='same')(merge)
+    x = LeakyReLU(alpha=0.2)(x)
+    x = Conv2DTranspose(256, 4, strides=2, padding='same')(x)   # 12x12 -> 24x24
+    x = LeakyReLU(alpha=0.2)(x)
+    x = Conv2D(128, 5, padding='same')(x)
+    x = LeakyReLU(alpha=0.2)(x)
+    x = Conv2DTranspose(128, 4, strides=2, padding='same')(x)   # 24x24 -> 48x48
+    x = LeakyReLU(alpha=0.2)(x)
+    x = Conv2D(64, 5, padding='same')(x)
+    x = LeakyReLU(alpha=0.2)(x)
+    out_layer = Conv2D(1, 7, activation='tanh', padding='same')(x)  # 48x48x1
+
+    model = Model([input_lat, input_label], out_layer)
+    return model
+g=define_unet_generator(latent_dim=100)
 g.summary()
 
 def define_gan(g_model, d_model):
     d_model.trainable = False
     gan_output = d_model(g_model.output)
     model = Model(g_model.input, gan_output)
-    opt = Adam(learning_rate=0.003, beta_1=0.5)
+    opt = Adam(learning_rate=0.0002, beta_1=0.5)
     model.compile(loss=['binary_crossentropy', 'sparse_categorical_crossentropy'], optimizer=opt)
     return model
 
@@ -123,6 +167,7 @@ def generate_fake_samples(generator, latent_dim, n_samples, n_classes=7):
 
 def train(g_model, d_model, gan_model, dataset, latent_dim, n_epochs, n_batch):
     X_train, y_train = dataset
+    #bat_per_epo = int(X_train.shape[0] / n_batch)
     bat_per_epo = 256
     for epoch in range(1, n_epochs + 1):
         print(f"Epoch {epoch}/{n_epochs}")
@@ -131,7 +176,7 @@ def train(g_model, d_model, gan_model, dataset, latent_dim, n_epochs, n_batch):
             d_model.trainable = True
             ix = np.random.randint(0, X_train.shape[0], n_batch)
             X_real, labels_real = X_train[ix], y_train[ix]
-            y_real = 0.9 * np.ones((n_batch, 1))
+            y_real = np.ones((n_batch, 1))
             d_loss_real = d_model.train_on_batch(X_real, [y_real, labels_real])
 
             X_fake, labels_fake = generate_fake_samples(g_model, latent_dim, n_batch)
@@ -149,38 +194,38 @@ def train(g_model, d_model, gan_model, dataset, latent_dim, n_epochs, n_batch):
             print(
                 f"  Batch {batch+1}/{bat_per_epo} | "
                 f"D_real: loss={d_loss_real[0]:.3f}, "
-                f"FAKE/REAL_acc={d_loss_real[2]:.3f}, EMO_acc={d_loss_real[4]:.3f} | "
+                f"FAKE/REAL_acc={d_loss_real[1]:.3f}, EMO_acc={d_loss_real[4]:.3f} | "
                 f"D_fake: loss={d_loss_fake[0]:.3f}, "
-                f"FAKE/REAL_acc={d_loss_fake[2]:.3f}, EMO_acc={d_loss_fake[4]:.3f} | "
+                f"FAKE/REAL_acc={d_loss_fake[1]:.3f}, EMO_acc={d_loss_fake[4]:.3f} | "
                 f"G_loss={g_loss[0]:.3f}"
             )
 
         # Save generated images every few epochs
         if epoch % 10 == 0:
-          examples=10
-          latent_dim=100
-          latent_points = np.random.randn(examples * latent_dim)
-          latent_points = latent_points.reshape(examples, latent_dim)
-          labels = np.random.randint(0, 7, examples).reshape(-1, 1)
-          X_fake = g_model.predict([latent_points, labels])
-          plt.figure(figsize=(10, 10))
-          for i in range(examples):
-            plt.subplot(1, examples, i + 1)
-            plt.imshow(X_fake[i].reshape(48, 48), cmap='gray')
-            plt.title('Label: %d' % labels[i])
-            plt.axis('off')
-          filename = 'generated_epoch2_%04d.png' % (epoch)
-          plt.savefig(filename)
-          plt.close()
+            examples = 7  # une image par label
+            latent_dim = 100
+            latent_points = np.random.randn(examples * latent_dim).reshape(examples, latent_dim)
+            labels = np.arange(7).reshape(-1, 1)  # 0 à 6, une fois chacun
+            X_fake = g_model.predict([latent_points, labels])
+            plt.figure(figsize=(14, 2))
+            for i in range(examples):
+                plt.subplot(1, examples, i + 1)
+                plt.imshow(X_fake[i].reshape(48, 48), cmap='gray')
+                plt.title(emotion_labels[labels[i][0]], fontsize=10)
+                plt.axis('off')
+            plt.tight_layout()
+            filename = f'generated_epoch2_{epoch:04d}.png'
+            plt.savefig(filename, bbox_inches='tight')
+            plt.close()
      
 
 def run_cgan():
     dataset = load_fer2013_dataset()
     X_train, y_train = dataset
     d_model = define_discriminator(input_shape=(48, 48, 1))
-    g_model = define_generator(latent_dim=100)
+    g_model = define_unet_generator(latent_dim=100)
     gan_model = define_gan(g_model, d_model)
-    train(g_model, d_model, gan_model, (X_train, y_train), latent_dim=100, n_epochs=200, n_batch=64)
+    train(g_model, d_model, gan_model, (X_train, y_train), latent_dim=100, n_epochs=100, n_batch=64)
     save_model(d_model, 'discriminator_model.h5')  # Save discriminator model
     # Save generator model
     save_model(g_model, 'generator_model.h5')  # Save generator model

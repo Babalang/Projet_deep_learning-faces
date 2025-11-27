@@ -6,9 +6,12 @@ from typing import List, Dict, Any, Tuple
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 from modules.Encoder import *
+from models.demography.Emotion import *
 import cv2
 import numpy as np
 from typing import Any, Dict, List, Union
+from tensorflow.keras.models import load_model
+
 
 def test_analyze_face():
     img_path = "./imgs_db/fear.jpg"
@@ -73,69 +76,58 @@ def draw_annotations(
 
 def vae_reconstruct(
     img_path: Union[str, np.ndarray, IO[bytes]],
-    enforce_detection: bool = True,
-    detector_backend: str = "opencv",
-    align: bool = True,
-    expand_percentage: int = 0,
-    silent: bool = False,
-    anti_spoofing: bool = False,
-) -> None:
-    """
-    Encode et décode le premier visage détecté, affiche l'image originale et reconstruite.
-    """
+    detector_backend="opencv",
+    enforce_detection=True,
+    align=True,
+    silent=False,
+):
     import cv2
+    import matplotlib.pyplot as plt
 
-    # 1. Encode
-    resp = encode(
-        img_path=img_path,
-        enforce_detection=enforce_detection,
-        detector_backend=detector_backend,
-        align=align,
-        expand_percentage=expand_percentage,
-        silent=silent,
-        anti_spoofing=anti_spoofing,
-    )
+    # 1. On charge les modèles corrects
+    encoder = load_model("encoder_model.h5", compile=False)
+    decoder = load_model("decoder_model.h5", compile=False)
 
-    if not resp or len(resp) == 0:
-        print("Aucun visage détecté.")
-        return
-
-    # 2. Decode
-    latent = resp[0].get("mu",resp[0]["z"])
-    reconstructed = decode(latent)
-
-    # 3. Affichage
-    # Récupère l'image originale (imagette du visage)
-    img_objs = extract_faces(
+    # 2. Extraction visage
+    face_obj = extract_faces(
         img_path=img_path,
         detector_backend=detector_backend,
         enforce_detection=enforce_detection,
         grayscale=False,
         align=align,
-        expand_percentage=expand_percentage,
-        anti_spoofing=anti_spoofing,
-    )
-    img_content = img_objs[0]["face"] * 255.0
-    img_content = img_content.astype(np.uint8)
-    img_gray = cv2.cvtColor(img_content, cv2.COLOR_BGR2GRAY)
-    img_gray = cv2.resize(img_gray, (48, 48))
+        max_faces=1,
+    )[0]["face"]
 
-    # Met les deux images côte à côte
-    reconstructed = reconstructed.squeeze()
-    if reconstructed.shape != img_gray.shape:
-        reconstructed = cv2.resize(reconstructed, img_gray.shape[::-1])
-    combined = np.hstack([img_gray, reconstructed])
+    # Conversion en grayscale 48x48x1
+    face = cv2.cvtColor((face_obj * 255).astype("uint8"), cv2.COLOR_BGR2GRAY)
+    face = cv2.resize(face, (48, 48))
+    face_norm = face.astype("float32") / 255.0
+    face_norm = face_norm[..., np.newaxis]  # (48,48,1)
+    x = face_norm[np.newaxis, ...]          # (1,48,48,1)
 
-    cv2.imshow("Original (gauche) | Reconstruite (droite)", combined)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-    
+    # 3. Encode
+    mu, logvar = encoder.predict(x)
+    epsilon = np.random.randn(*mu.shape)
+    z = mu + np.exp(0.5 * logvar) * epsilon
 
+    # 4. Decode pour chaque émotion
+    emotion_labels = ['Angry', 'Disgust', 'Fear', 'Happy', 'Sad', 'Surprise', 'Neutral']
+    plt.figure(figsize=(14, 2))
+    for i, label in enumerate(range(7)):
+        label_arr = np.array([[label]])
+        generated = decoder.predict([z, label_arr])[0].squeeze()
+        plt.subplot(1, 7, i+1)
+        plt.imshow(generated, cmap='gray')
+        plt.title(emotion_labels[label], fontsize=10)
+        plt.axis('off')
+    plt.tight_layout()
+    plt.show()
 
 def main():
     #train_emotion_model()
-    test_analyze_face()
-    #vae_reconstruct("./imgs_db/fear.jpg")
+    #test_analyze_face()
+    vae_train()
+    vae_reconstruct("./imgs_db/neutral.webp")
 
 if __name__ == "__main__":
     main()
