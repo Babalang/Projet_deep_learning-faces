@@ -77,7 +77,7 @@ def define_discriminator(input_shape=(48, 48, 1), n_classes=7):
     out1 = Dense(1, activation='sigmoid', name="fake_real")(x)
     out2 = Dense(n_classes, activation='softmax', name="emotion")(x)
     model = Model(input_image, [out1, out2])
-    opt = Adam(learning_rate=0.0003, beta_1=0.5)
+    opt = Adam(learning_rate=0.0001, beta_1=0.5)
     model.compile(
         loss=['binary_crossentropy', 'sparse_categorical_crossentropy'],
         optimizer=opt,
@@ -203,7 +203,6 @@ def train(g_model, d_model, gan_model, dataset, latent_dim, n_epochs, n_batch):
         # Save generated images every few epochs
         if epoch % 10 == 0:
             examples = 7  # une image par label
-            latent_dim = 100
             latent_points = np.random.randn(examples * latent_dim).reshape(examples, latent_dim)
             labels = np.arange(7).reshape(-1, 1)  # 0 à 6, une fois chacun
             X_fake = g_model.predict([latent_points, labels])
@@ -223,9 +222,9 @@ def run_cgan():
     dataset = load_fer2013_dataset()
     X_train, y_train = dataset
     d_model = define_discriminator(input_shape=(48, 48, 1))
-    g_model = define_unet_generator(latent_dim=100)
+    g_model = define_unet_generator(latent_dim=128)
     gan_model = define_gan(g_model, d_model)
-    train(g_model, d_model, gan_model, (X_train, y_train), latent_dim=100, n_epochs=100, n_batch=64)
+    train(g_model, d_model, gan_model, (X_train, y_train), latent_dim=128, n_epochs=100, n_batch=64)
     save_model(d_model, 'discriminator_model.h5')  # Save discriminator model
     # Save generator model
     save_model(g_model, 'generator_model.h5')  # Save generator model
@@ -246,7 +245,7 @@ if __name__ == "__main__":
     if choice == 'train':
         run_cgan()
     elif choice == 'generate':
-        latent_vector = np.random.randn(100)
+        latent_vector = np.random.randn(128)
         emotion_label = int(input("Entrez une étiquette d'émotion (0 = colère, 1 = dégoût, 2 = peur, 3 = bonheur, 4 = tristesse, 5 = surprise, 6 = neutre): "))
         generated_image = generate_emotion_image(latent_vector, emotion_label)
         import matplotlib.pyplot as plt
