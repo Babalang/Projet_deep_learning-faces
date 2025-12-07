@@ -8,3 +8,8 @@ __pycache__/
 /test_deepFace/imgs_db
 .venv
 test_deepFace/models/faceflex_cvae.pth
+checkpoints/
+/runs
+*.png
+*.h5
+*.csv
