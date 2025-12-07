@@ -7,9 +7,12 @@ __pycache__/
 *.pyc
 /test_deepFace/imgs_db
 .venv
-test_deepFace/models/faceflex_cvae.pth
+*.pth
 checkpoints/
 /runs
 *.png
 *.h5
 *.csv
+/Code/data/imgs_db/train
+/Code/data/imgs_db/test
+/test_deepFace/modules/__pycache__
